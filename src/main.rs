@@ -1,23 +1,50 @@
-use std::fs::OpenOptions;
-use std::io::{Write, Seek, SeekFrom, Read};
-use std::process::Command;
-use std::env;
 use rand::{thread_rng, Rng};
+use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
+use std::path::Path;
+use std::process::Command;
+use std::thread;
+
+fn is_drive_in_use(device: &str) -> bool {
+    let output = Command::new("lsof")
+        .arg(device)
+        .output()
+        .expect("Failed to execute lsof");
+
+    !output.stdout.is_empty()
+}
+
+fn is_drive_mounted(device: &str) -> bool {
+    let path = Path::new("/proc/mounts");
+    let file = File::open(path).expect("Unable to open /proc/mounts");
+
+    let reader = io::BufReader::new(file);
+
+    for line in reader.lines() {
+        let line = line.unwrap();
+        if line.contains(device) {
+            return true;
+        }
+    }
+    false
+}
 
 fn wipe_drive(device: &str, passes: u32, use_random: bool, verify: bool) -> std::io::Result<()> {
     // Open the device for writing
-    let mut file = OpenOptions::new()
-        .write(true)
-        .open(device)?;
+    let mut file = OpenOptions::new().write(true).open(device)?;
 
     // Get the drive size
     let output = Command::new("blockdev")
         .arg("--getsize64")
         .arg(device)
         .output()?;
-    
-    let drive_size: u64 = String::from_utf8_lossy(&output.stdout).trim().parse().unwrap();
-    
+
+    let drive_size: u64 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+
     // Create a buffer of 1MB
     let mut buffer = vec![0u8; 1024 * 1024];
 
@@ -84,7 +111,10 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} [--zero|--random] [--passes <n>] [--verify] <device1> <device2> ...", args[0]);
+        eprintln!(
+            "Usage: {} [--zero|--random] [--passes <n>] [--verify] <device1> <device2> ...",
+            args[0]
+        );
         std::process::exit(1);
     }
 
@@ -130,10 +160,43 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Wipe all specified devices
+    // Check if the device is mounted or in use before proceeding
+    for device in &devices {
+        if is_drive_mounted(device) {
+            eprintln!(
+                "Error: Device {} is mounted. Please unmount the device before wiping.",
+                device
+            );
+            std::process::exit(1);
+        }
+
+        if is_drive_in_use(device) {
+            eprintln!(
+                "Error: Device {} is currently in use by another process.\n Please close all processes using it before wiping.",
+                device
+            );
+            std::process::exit(1);
+        }
+    }
+
+    // Create a vector to hold the thread handles
+    let mut handles = vec![];
+
+    // launch a separate thread for each device
     for device in devices {
-        if let Err(e) = wipe_drive(&device, passes, use_random, verify) {
-            eprintln!("Failed to wipe {}: {}", device, e);
+        let device_clone = device.clone();
+        let handle = thread::spawn(move || {
+            if let Err(e) = wipe_drive(&device_clone, passes, use_random, verify) {
+                eprintln!("Failed to wipe {}: {}", device_clone, e);
+            }
+        });
+        handles.push(handle);
+    }
+
+    // Wait for all threads to complete
+    for handle in handles {
+        if let Err(e) = handle.join() {
+            eprintln!("Thread failed: {:?}", e);
         }
     }
 }
