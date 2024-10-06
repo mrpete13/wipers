@@ -1,6 +1,7 @@
 ## wipers
 
 A simple CLI tool to wipe one or more drives.
+Currently only works on linux
 
 #### Usage
 
