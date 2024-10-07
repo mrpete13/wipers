@@ -30,6 +30,55 @@ fn is_drive_mounted(device: &str) -> bool {
     false
 }
 
+fn unmount_drive(device: &str) -> std::io::Result<()> {
+    // Logic to unmount the drive
+    // You can use std::process::Command to call `umount` here
+    std::process::Command::new("sudo")
+        .arg("umount")
+        .arg(device)
+        .status()?;
+
+    Ok(())
+}
+
+fn verify_wipe(device: &str, drive_size: u64, use_random: bool) -> io::Result<()> {
+    println!("Verifying wipe on {}", device);
+
+    // Reopen the device for reading
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(device)
+        .expect("Failed to open device for verification");
+
+    file.seek(SeekFrom::Start(0))?; // Reset file cursor to the start
+    let mut read_buffer = vec![0u8; 1024 * 1024]; // 1MB buffer for reading
+    let mut read_bytes: u64 = 0;
+
+    while read_bytes < drive_size {
+        file.read_exact(&mut read_buffer)?;
+
+        if use_random {
+            // Skip verification for random data since we can't predict the pattern
+            eprintln!("Warning: Verification of random data is not supported.");
+            break;
+        } else {
+            // For zero wipe, ensure all bytes are zero
+            if read_buffer.iter().any(|&byte| byte != 0) {
+                eprintln!("Verification failed on {}", device);
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Verification failed: Non-zero byte found",
+                ));
+            }
+        }
+
+        read_bytes += read_buffer.len() as u64;
+    }
+
+    println!("Verification successful for {}", device);
+    Ok(())
+}
+
 fn wipe_drive(device: &str, passes: u32, use_random: bool, verify: bool) -> std::io::Result<()> {
     // Open the device for writing
     let mut file = OpenOptions::new().write(true).open(device)?;
@@ -78,28 +127,10 @@ fn wipe_drive(device: &str, passes: u32, use_random: bool, verify: bool) -> std:
 
     // Optionally verify the wipe
     if verify {
-        println!("Verifying wipe on {}", device);
-        file.seek(SeekFrom::Start(0))?;
-        let mut read_buffer = vec![0u8; 1024 * 1024];
-        let mut read_bytes: u64 = 0;
-
-        while read_bytes < drive_size {
-            file.read_exact(&mut read_buffer)?;
-            if use_random {
-                // For random data, we can't verify the exact pattern, so just skip
-                eprintln!("Warning: Verification of random data is not supported.");
-                break;
-            } else {
-                // For zero wipe, ensure all bytes are zero
-                if read_buffer.iter().any(|&byte| byte != 0) {
-                    eprintln!("Verification failed on {}", device);
-                    std::process::exit(1);
-                }
-            }
-            read_bytes += read_buffer.len() as u64;
+        if let Err(e) = verify_wipe(device, drive_size, use_random) {
+            eprintln!("Verification failed: {}", e);
+            std::process::exit(1); // Exit if verification fails
         }
-
-        println!("Verification successful for {}", device);
     }
 
     println!("Drive wipe complete on {}", device);
@@ -112,7 +143,7 @@ fn main() {
 
     if args.len() < 2 {
         eprintln!(
-            "Usage: {} [--zero|--random] [--passes <n>] [--verify] <device1> <device2> ...",
+            "Usage: {} [--zero|--random] [--passes <n>] [--verify] </dev/disk0> </dev/disk1> ...",
             args[0]
         );
         std::process::exit(1);
@@ -162,20 +193,21 @@ fn main() {
 
     // Check if the device is mounted or in use before proceeding
     for device in &devices {
-        if is_drive_mounted(device) {
-            eprintln!(
-                "Error: Device {} is mounted. Please unmount the device before wiping.",
-                device
-            );
-            std::process::exit(1);
-        }
+        if is_drive_mounted(device) || is_drive_in_use(device) {
+            println!("The drive {} is currently mounted or in use.", device);
+            print!("Would you like to unmount the drive now? (y/n): ");
+            io::stdout().flush()?; // Ensure the prompt is printed
 
-        if is_drive_in_use(device) {
-            eprintln!(
-                "Error: Device {} is currently in use by another process.\n Please close all processes using it before wiping.",
-                device
-            );
-            std::process::exit(1);
+            let mut response = String::new();
+            io::stdin().read_line(&mut response)?;
+
+            if response.trim().eq_ignore_ascii_case("y") {
+                unmount_drive(device)?;
+                println!("Drive {} unmounted successfully.", device);
+            } else {
+                eprintln!("Please unmount the drive manually and try again.");
+                std::process::exit(1); // Exit if the user declines
+            }
         }
     }
 
