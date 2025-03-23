@@ -196,13 +196,13 @@ fn main() {
         if is_drive_mounted(device) || is_drive_in_use(device) {
             println!("The drive {} is currently mounted or in use.", device);
             print!("Would you like to unmount the drive now? (y/n): ");
-            io::stdout().flush()?; // Ensure the prompt is printed
+            io::stdout().flush(); // Ensure the prompt is printed
 
             let mut response = String::new();
-            io::stdin().read_line(&mut response)?;
+            io::stdin().read_line(&mut response);
 
             if response.trim().eq_ignore_ascii_case("y") {
-                unmount_drive(device)?;
+                unmount_drive(device);
                 println!("Drive {} unmounted successfully.", device);
             } else {
                 eprintln!("Please unmount the drive manually and try again.");
