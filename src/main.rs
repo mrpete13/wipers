@@ -15,12 +15,30 @@ fn is_drive_in_use(device: &str) -> bool {
     !output.stdout.is_empty()
 }
 
+fn is_ssd(device: &str) -> Result<bool, std::io::Error> {
+    let output = Command::new("lsblk")
+        .arg("-d")
+        .arg("-o")
+        .arg("TYPE,rota")
+        .arg(device)
+        .output()
+        .expect("Failed to execute lsblk");
+
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "lsblk command failed",
+        ));
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    Ok(output_str.contains("disk 0") || output_str.contains("rom 0"))
+}
+
 fn is_drive_mounted(device: &str) -> bool {
     let path = Path::new("/proc/mounts");
     let file = File::open(path).expect("Unable to open /proc/mounts");
-
     let reader = io::BufReader::new(file);
-
     for line in reader.lines() {
         let line = line.unwrap();
         if line.contains(device) {
@@ -207,6 +225,37 @@ fn main() {
             } else {
                 eprintln!("Please unmount the drive manually and try again.");
                 std::process::exit(1); // Exit if the user declines
+            }
+        }
+
+        match is_ssd(device) {
+            Ok(true) => {
+                println!("This program causes extremely heavy wear on SSDs- Continue? (y/n): ");
+                let mut response = String::new();
+                io::stdin()
+                    .read_line(&mut response)
+                    .expect("Failed to read line");
+
+                match response.trim().to_lowercase().as_str() {
+                    "y" => {
+                        //unmount_drive(device);
+                        println!("Ok, wiping {}.", device);
+                    }
+                    _ => {
+                        eprintln!(
+                            "Please remove {} from the list of devices and try again.",
+                            device
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Ok(false) => {
+                // Device is not an SSD, continue with the program
+            }
+            Err(e) => {
+                eprintln!("Error checking if device is SSD: {}", e);
+                std::process::exit(1);
             }
         }
     }
